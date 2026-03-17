@@ -119,10 +119,7 @@ class BufferAllocator:
                     else:
                         self.free_blocks.pop(i)
                     return start
-        raise MemoryError(
-            f"Out of memory in buffer pool. "
-            f"Requested {size} bytes (aligned {aligned})."
-        )
+        raise MemoryError(f"Out of memory in buffer pool. Requested {size} bytes (aligned {aligned}).")
 
     def free(self, offset: int, size: int) -> None:
         aligned = (size + self.alignment - 1) // self.alignment * self.alignment
@@ -196,14 +193,9 @@ class ManagedBuffer:
         for d in shape:
             expected *= d
         if expected != self.size:
-            raise ValueError(
-                f"Shape {shape} dtype {dtype} needs {expected} bytes, "
-                f"buffer has {self.size}"
-            )
+            raise ValueError(f"Shape {shape} dtype {dtype} needs {expected} bytes, buffer has {self.size}")
         if self.offset % itemsize != 0:
-            raise RuntimeError(
-                f"Buffer offset {self.offset} not aligned for {dtype}"
-            )
+            raise RuntimeError(f"Buffer offset {self.offset} not aligned for {dtype}")
         return self.tensor.view(dtype).reshape(shape)
 
     def to_bytes(self) -> bytes:
@@ -230,9 +222,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
     # ------------------------------------------------------------------ init
     def __init__(self, config: dict[str, Any]):
         if IOEngine is None:
-            raise ImportError(
-                "Mori is not available. Install via: pip install mori"
-            )
+            raise ImportError("Mori is not available. Install via: pip install mori")
 
         self._closed = False
         self._bind_error: Exception | None = None
@@ -290,10 +280,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         # ---- Role ----
         role = str(config.get("role", "sender")).lower()
         if role not in {"sender", "receiver"}:
-            raise ValueError(
-                f"Invalid role={role!r} for MoriTransferEngineConnector. "
-                f"Expected 'sender' or 'receiver'."
-            )
+            raise ValueError(f"Invalid role={role!r} for MoriTransferEngineConnector. Expected 'sender' or 'receiver'.")
         self.can_put = role == "sender"
 
         # ---- Mori IOEngine ----
@@ -301,10 +288,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             os.environ["MORI_RDMA_DEVICES"] = self.device_name
 
         engine_config = IOEngineConfig(host=self.host, port=0)
-        self.engine_key = (
-            f"omni-{role}-{uuid.uuid4().hex[:8]}-"
-            f"pid{os.getpid()}-{self.host}"
-        )
+        self.engine_key = f"omni-{role}-{uuid.uuid4().hex[:8]}-pid{os.getpid()}-{self.host}"
         self.engine = IOEngine(self.engine_key, engine_config)
 
         qp_per_transfer = config.get("qp_per_transfer", 1)
@@ -322,30 +306,20 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
         self.engine_desc: EngineDesc = self.engine.get_engine_desc()
         self.engine_desc_packed: bytes = self.engine_desc.pack()
-        logger.info(
-            f"Mori IOEngine ready: key={self.engine_key} "
-            f"at {self.engine_desc.host}:{self.engine_desc.port}"
-        )
+        logger.info(f"Mori IOEngine ready: key={self.engine_key} at {self.engine_desc.host}:{self.engine_desc.port}")
 
         # ---- Pool allocation & Mori memory registration ----
-        logger.info(
-            f"Allocating RDMA pool: "
-            f"{self.pool_size / 1024**2:.2f} MB on {self.pool_device}"
-        )
+        logger.info(f"Allocating RDMA pool: {self.pool_size / 1024**2:.2f} MB on {self.pool_device}")
         try:
             if self.pool_device == "cpu":
-                self.pool = torch.empty(
-                    self.pool_size, dtype=torch.uint8
-                ).pin_memory()
+                self.pool = torch.empty(self.pool_size, dtype=torch.uint8).pin_memory()
             else:
                 self.pool = torch.empty(
                     self.pool_size,
                     dtype=torch.uint8,
                     device=self.pool_device,
                 )
-            self.pool_mem_desc: MemoryDesc = self.engine.register_torch_tensor(
-                self.pool
-            )
+            self.pool_mem_desc: MemoryDesc = self.engine.register_torch_tensor(self.pool)
             self.pool_mem_desc_packed: bytes = self.pool_mem_desc.pack()
             self.base_ptr = self.pool.data_ptr()
         except Exception as e:
@@ -356,9 +330,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
         # ---- ZMQ / threading ----
         self.zmq_ctx = zmq.Context()
-        self._sender_executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="mori-sender"
-        )
+        self._sender_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mori-sender")
 
         logger.info(
             f"MoriTransferEngineConnector config:\n"
@@ -371,30 +343,20 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
         if self.can_put:
             self._last_ttl_check = _time_mod.monotonic()
-            self._listener_thread = threading.Thread(
-                target=self._zmq_listener_loop, daemon=True
-            )
+            self._listener_thread = threading.Thread(target=self._zmq_listener_loop, daemon=True)
             self._listener_thread.start()
             self._listener_ready.wait(timeout=1.0)
             if self._bind_error is not None:
                 raise RuntimeError(
-                    f"MoriTransferEngineConnector failed to bind ZMQ on "
-                    f"{self.host}:{self.zmq_port}: {self._bind_error}"
+                    f"MoriTransferEngineConnector failed to bind ZMQ on {self.host}:{self.zmq_port}: {self._bind_error}"
                 ) from self._bind_error
-            logger.info(
-                f"MoriTransferEngineConnector SENDER ready "
-                f"(ZMQ on {self.host}:{self.zmq_port})"
-            )
+            logger.info(f"MoriTransferEngineConnector SENDER ready (ZMQ on {self.host}:{self.zmq_port})")
         else:
             if not self.sender_host or self.sender_host.lower() == "auto":
-                logger.info(
-                    "MoriTransferEngineConnector RECEIVER: "
-                    "awaiting sender info via update_sender_info()."
-                )
+                logger.info("MoriTransferEngineConnector RECEIVER: awaiting sender info via update_sender_info().")
             else:
                 logger.info(
-                    f"MoriTransferEngineConnector RECEIVER ready "
-                    f"(sender at {self.sender_host}:{self.sender_zmq_port})"
+                    f"MoriTransferEngineConnector RECEIVER ready (sender at {self.sender_host}:{self.sender_zmq_port})"
                 )
 
     # -------------------------------------------------------- public helpers
@@ -406,16 +368,11 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             "can_put": self.can_put,
         }
 
-    def update_sender_info(
-        self, sender_host: str, sender_zmq_port: int
-    ) -> None:
+    def update_sender_info(self, sender_host: str, sender_zmq_port: int) -> None:
         """Inject the sender's ZMQ endpoint into the receiver connector."""
         self.sender_host = sender_host
         self.sender_zmq_port = sender_zmq_port
-        logger.info(
-            f"Sender info updated: host={sender_host!r}, "
-            f"zmq_port={sender_zmq_port}"
-        )
+        logger.info(f"Sender info updated: host={sender_host!r}, zmq_port={sender_zmq_port}")
 
     # -------------------------------------------------- internal helpers
     @staticmethod
@@ -430,12 +387,8 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             except Exception:
                 return "127.0.0.1"
 
-    def _get_req_socket(
-        self, zmq_addr: str, timeout_ms: int
-    ) -> zmq.Socket:
-        cache: dict[str, zmq.Socket] | None = getattr(
-            self._req_local, "cache", None
-        )
+    def _get_req_socket(self, zmq_addr: str, timeout_ms: int) -> zmq.Socket:
+        cache: dict[str, zmq.Socket] | None = getattr(self._req_local, "cache", None)
         if cache is None:
             cache = {}
             self._req_local.cache = cache
@@ -450,9 +403,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         return sock
 
     def _invalidate_req_socket(self, zmq_addr: str) -> None:
-        cache: dict[str, zmq.Socket] | None = getattr(
-            self._req_local, "cache", None
-        )
+        cache: dict[str, zmq.Socket] | None = getattr(self._req_local, "cache", None)
         if cache is None:
             return
         sock = cache.pop(zmq_addr, None)
@@ -482,13 +433,9 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         data: Any,
     ) -> tuple[bool, int, dict[str, Any] | None]:
         if self._closed:
-            raise RuntimeError(
-                "Cannot put: MoriTransferEngineConnector is closed"
-            )
+            raise RuntimeError("Cannot put: MoriTransferEngineConnector is closed")
         if not self.can_put:
-            logger.warning(
-                f"Rejecting put for {put_key}: connector is receiver-only"
-            )
+            logger.warning(f"Rejecting put for {put_key}: connector is receiver-only")
             return False, 0, None
 
         put_key = self._make_key(put_key, from_stage, to_stage)
@@ -529,9 +476,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
                 try:
                     offset = self.allocator.alloc(size)
-                    holder = ManagedBuffer(
-                        self.allocator, offset, size, self.pool
-                    )
+                    holder = ManagedBuffer(self.allocator, offset, size, self.pool)
                     should_release = True
                 except MemoryError:
                     logger.error(f"Pool exhausted for {size} bytes")
@@ -579,10 +524,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                     _, _, oh, osr, _, _ = old
                     if osr and isinstance(oh, ManagedBuffer):
                         oh.release()
-                        logger.warning(
-                            f"Released stale buffer for duplicate key: "
-                            f"{put_key}"
-                        )
+                        logger.warning(f"Released stale buffer for duplicate key: {put_key}")
                 # (offset, size, holder, should_release, is_fast_path, ts)
                 self._local_buffers[put_key] = (
                     src_offset,
@@ -609,9 +551,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             return False, 0, None
 
     # ------------------------------------------------ query (no-metadata get)
-    def _query_metadata_from_sender(
-        self, get_key: str
-    ) -> dict[str, Any] | None:
+    def _query_metadata_from_sender(self, get_key: str) -> dict[str, Any] | None:
         zmq_addr = f"tcp://{self.sender_host}:{self.sender_zmq_port}"
         req_socket = self._get_req_socket(zmq_addr, timeout_ms=5000)
         try:
@@ -641,24 +581,15 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         metadata: dict[str, Any] | None = None,
     ) -> tuple[Any, int] | None:
         if self._closed:
-            raise RuntimeError(
-                "Cannot get: MoriTransferEngineConnector is closed"
-            )
+            raise RuntimeError("Cannot get: MoriTransferEngineConnector is closed")
 
         get_key = self._make_key(get_key, from_stage, to_stage)
         _t0 = _time_mod.perf_counter()
 
         # Resolve metadata
         if not metadata:
-            if (
-                not self.sender_host
-                or not self.sender_zmq_port
-                or str(self.sender_host).lower() == "auto"
-            ):
-                raise RuntimeError(
-                    "get(metadata=None) requires sender info. "
-                    "Call update_sender_info() first."
-                )
+            if not self.sender_host or not self.sender_zmq_port or str(self.sender_host).lower() == "auto":
+                raise RuntimeError("get(metadata=None) requires sender info. Call update_sender_info() first.")
             metadata = self._query_metadata_from_sender(get_key)
             if not metadata:
                 return None
@@ -671,11 +602,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         data_size = metadata.get("data_size", 0)
         is_fast_path = metadata.get("is_fast_path", False)
 
-        if (
-            not src_host
-            or not src_port
-            or str(src_host).lower() == "auto"
-        ):
+        if not src_host or not src_port or str(src_host).lower() == "auto":
             logger.error(f"Invalid metadata for {get_key}")
             return None
         if data_size == 0:
@@ -685,9 +612,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         # Allocate destination buffer
         try:
             offset = self.allocator.alloc(data_size)
-            recv_buf = ManagedBuffer(
-                self.allocator, offset, data_size, self.pool
-            )
+            recv_buf = ManagedBuffer(self.allocator, offset, data_size, self.pool)
         except MemoryError:
             logger.error(f"Failed to allocate {data_size} bytes for get")
             return None
@@ -705,14 +630,10 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         )
 
         _base_timeout_ms = 30000
-        _size_timeout_ms = max(
-            0, (data_size // (100 * 1024 * 1024))
-        ) * 5000
+        _size_timeout_ms = max(0, (data_size // (100 * 1024 * 1024))) * 5000
         _total_timeout_ms = _base_timeout_ms + _size_timeout_ms
         zmq_addr = f"tcp://{src_host}:{src_port}"
-        req_socket = self._get_req_socket(
-            zmq_addr, timeout_ms=_total_timeout_ms
-        )
+        req_socket = self._get_req_socket(zmq_addr, timeout_ms=_total_timeout_ms)
 
         try:
             req_socket.send(msgspec.msgpack.encode(pull_req))
@@ -731,11 +652,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
                 if is_fast_path:
                     _total_ms = (_time_mod.perf_counter() - _t0) * 1000
-                    _mbps = (
-                        (data_size / 1024 / 1024) / (_total_ms / 1000)
-                        if _total_ms > 0
-                        else 0
-                    )
+                    _mbps = (data_size / 1024 / 1024) / (_total_ms / 1000) if _total_ms > 0 else 0
                     logger.info(
                         f"[MORI GET] {get_key}: query={_query_ms:.1f}ms, "
                         f"alloc={_alloc_ms:.1f}ms, rdma={_rdma_ms:.1f}ms, "
@@ -749,19 +666,9 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                     try:
                         raw = recv_buf.to_bytes()
                         val = OmniSerializer.deserialize(raw)
-                        _total_ms = (
-                            _time_mod.perf_counter() - _t0
-                        ) * 1000
-                        _mbps = (
-                            (data_size / 1024 / 1024) / (_total_ms / 1000)
-                            if _total_ms > 0
-                            else 0
-                        )
-                        logger.info(
-                            f"[MORI GET] {get_key}: "
-                            f"total={_total_ms:.1f}ms, "
-                            f"{_mbps:.1f} MB/s (deserialized)"
-                        )
+                        _total_ms = (_time_mod.perf_counter() - _t0) * 1000
+                        _mbps = (data_size / 1024 / 1024) / (_total_ms / 1000) if _total_ms > 0 else 0
+                        logger.info(f"[MORI GET] {get_key}: total={_total_ms:.1f}ms, {_mbps:.1f} MB/s (deserialized)")
                         self._metrics["gets"] += 1
                         self._metrics["bytes_transferred"] += data_size
                         return val, data_size
@@ -769,10 +676,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                         recv_buf.release()
             else:
                 self._metrics["errors"] += 1
-                logger.error(
-                    f"MORI get failed: received {resp} "
-                    f"instead of TRANS_DONE"
-                )
+                logger.error(f"MORI get failed: received {resp} instead of TRANS_DONE")
                 recv_buf.release()
                 return None
         except Exception as e:
@@ -790,9 +694,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         to_stage: str | None = None,
     ) -> None:
         if (from_stage is None) != (to_stage is None):
-            raise ValueError(
-                "cleanup() requires both from_stage and to_stage, or neither."
-            )
+            raise ValueError("cleanup() requires both from_stage and to_stage, or neither.")
         if from_stage is not None and to_stage is not None:
             request_id = self._make_key(request_id, from_stage, to_stage)
         with self._local_buffers_lock:
@@ -824,18 +726,13 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
         self._stop_event.set()
 
-        if (
-            self._listener_thread is not None
-            and self._listener_thread.is_alive()
-        ):
+        if self._listener_thread is not None and self._listener_thread.is_alive():
             self._listener_thread.join(timeout=2.0)
             if self._listener_thread.is_alive():
                 logger.warning("Listener thread did not stop gracefully")
 
         if self._sender_executor is not None:
-            self._sender_executor.shutdown(
-                wait=True, cancel_futures=False
-            )
+            self._sender_executor.shutdown(wait=True, cancel_futures=False)
 
         with self._local_buffers_lock:
             for _k, item in list(self._local_buffers.items()):
@@ -844,9 +741,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                     holder.release()
             self._local_buffers.clear()
 
-        cache: dict[str, zmq.Socket] | None = getattr(
-            self._req_local, "cache", None
-        )
+        cache: dict[str, zmq.Socket] | None = getattr(self._req_local, "cache", None)
         if cache:
             for _addr, sock in cache.items():
                 try:
@@ -868,20 +763,13 @@ class MoriTransferEngineConnector(OmniConnectorBase):
     def _cleanup_stale_buffers(self) -> None:
         now = _time_mod.monotonic()
         with self._local_buffers_lock:
-            stale = [
-                k
-                for k, v in self._local_buffers.items()
-                if now - v[5] > _BUFFER_TTL_SECONDS
-            ]
+            stale = [k for k, v in self._local_buffers.items() if now - v[5] > _BUFFER_TTL_SECONDS]
             for k in stale:
                 item = self._local_buffers.pop(k)
                 _, _, holder, sr, _, _ = item
                 if sr and isinstance(holder, ManagedBuffer):
                     holder.release()
-                logger.warning(
-                    f"TTL expired ({_BUFFER_TTL_SECONDS}s): "
-                    f"reclaimed buffer for {k}"
-                )
+                logger.warning(f"TTL expired ({_BUFFER_TTL_SECONDS}s): reclaimed buffer for {k}")
 
     def _zmq_listener_loop(self) -> None:
         sock = self.zmq_ctx.socket(zmq.ROUTER)
@@ -893,15 +781,9 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             bound = True
         except zmq.ZMQError as exc:
             if exc.errno in (zmq.EADDRINUSE, 98):
-                logger.warning(
-                    f"ZMQ port {self.zmq_port} already in use, "
-                    f"falling back to OS-assigned port"
-                )
+                logger.warning(f"ZMQ port {self.zmq_port} already in use, falling back to OS-assigned port")
             else:
-                logger.error(
-                    f"ZMQ bind failed on "
-                    f"{self.host}:{self.zmq_port}: {exc}"
-                )
+                logger.error(f"ZMQ bind failed on {self.host}:{self.zmq_port}: {exc}")
                 self.can_put = False
                 self._bind_error = exc
                 self._listener_ready.set()
@@ -913,9 +795,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                 sock.bind(f"tcp://{self.host}:*")
                 bound = True
             except zmq.ZMQError as exc:
-                logger.error(
-                    f"ZMQ bind failed on {self.host}:*: {exc}"
-                )
+                logger.error(f"ZMQ bind failed on {self.host}:*: {exc}")
                 self.can_put = False
                 self._bind_error = exc
                 self._listener_ready.set()
@@ -927,10 +807,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         endpoint = sock.getsockopt(zmq.LAST_ENDPOINT).decode()
         actual_port = int(endpoint.rsplit(":", 1)[1])
         if actual_port != self.zmq_port:
-            logger.info(
-                f"ZMQ listener bound on {self.host}:{actual_port} "
-                f"(configured: {self.zmq_port})"
-            )
+            logger.info(f"ZMQ listener bound on {self.host}:{actual_port} (configured: {self.zmq_port})")
         self.zmq_port = actual_port
 
         self._listener_ready.set()
@@ -960,9 +837,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                     while True:
                         try:
                             identity, response = response_queue.get_nowait()
-                            sock.send_multipart(
-                                [identity, b"", response]
-                            )
+                            sock.send_multipart([identity, b"", response])
                         except queue.Empty:
                             break
 
@@ -984,9 +859,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                 except zmq.ContextTerminated:
                     break
                 except Exception:
-                    logger.debug(
-                        "Listener loop error", exc_info=True
-                    )
+                    logger.debug("Listener loop error", exc_info=True)
         finally:
             try:
                 notify_recv.close(linger=0)
@@ -1044,26 +917,18 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             for st in statuses:
                 st.Wait()
                 if st.Failed():
-                    logger.error(
-                        f"RDMA write failed for {pull.request_id}: "
-                        f"{st.Message()}"
-                    )
+                    logger.error(f"RDMA write failed for {pull.request_id}: {st.Message()}")
                     success = False
 
             if success:
                 self.cleanup(pull.request_id)
                 response_queue.put((identity, TRANS_DONE))
             else:
-                logger.warning(
-                    f"RDMA write failed for {pull.request_id}. "
-                    f"Buffer retained for retry."
-                )
+                logger.warning(f"RDMA write failed for {pull.request_id}. Buffer retained for retry.")
                 response_queue.put((identity, TRANS_ERROR))
 
         except Exception as e:
-            logger.error(
-                f"Pull request handler error: {e}", exc_info=True
-            )
+            logger.error(f"Pull request handler error: {e}", exc_info=True)
             response_queue.put((identity, TRANS_ERROR))
 
         self._notify_listener(notify_addr)
@@ -1088,9 +953,7 @@ class MoriTransferEngineConnector(OmniConnectorBase):
                     data_size=data_size,
                     is_fast_path=is_fast,
                 )
-                response_queue.put(
-                    (identity, msgspec.msgpack.encode(resp))
-                )
+                response_queue.put((identity, msgspec.msgpack.encode(resp)))
         except Exception as e:
             logger.error(f"Query handler error: {e}")
             response_queue.put((identity, INFO_NOT_FOUND))
