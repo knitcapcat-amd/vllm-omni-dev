@@ -118,6 +118,16 @@ runtime:
         localbuf: 64000000     # 64MB
         proto: "tcp"
 
+    # Mori RDMA connector for cross-node/intra-node communication
+    mori_connector:
+      name: MoriTransferEngineConnector
+      extra:
+        host: "auto"
+        zmq_port: 50051
+        device_name: ""
+        memory_pool_size: 536870912   # 512 MB
+        memory_pool_device: "cpu"
+
     # Yuanrong connector for cross-node/intra-node communication
     yuanrong_connector:
       name: YuanrongConnector
