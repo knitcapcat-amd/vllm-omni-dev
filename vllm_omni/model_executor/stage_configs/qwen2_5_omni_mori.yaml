@@ -1,0 +1,143 @@
+# Qwen2.5-Omni multi-node config using Mori RDMA transfer engine.
+#
+# Usage:
+#   Node 0 (Stage 0 - Thinker):
+#     vllm serve <model> --omni --port 8000 \
+#       --stage-configs-path <this_file> --stage-id 0 \
+#       -oma <NODE0_IP> -omp 8091
+#
+#   Node 1 (Stage 1 - Talker):
+#     vllm serve <model> --omni --headless \
+#       --stage-configs-path <this_file> --stage-id 1 \
+#       -oma <NODE0_IP> -omp 8091
+#
+#   Node 2 (Stage 2 - Code2Wav):
+#     vllm serve <model> --omni --headless \
+#       --stage-configs-path <this_file> --stage-id 2 \
+#       -oma <NODE0_IP> -omp 8091
+#
+# Prerequisites:
+#   pip install mori
+#   RDMA driver installed (e.g. Mellanox OFED)
+
+stage_args:
+  - stage_id: 0
+    stage_type: llm
+    runtime:
+      process: true
+      devices: "0"
+      max_batch_size: 1
+    engine_args:
+      model_stage: thinker
+      model_arch: Qwen2_5OmniForConditionalGeneration
+      worker_type: ar
+      scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
+      gpu_memory_utilization: 0.8
+      enforce_eager: true
+      trust_remote_code: true
+      engine_output_type: latent
+      enable_prefix_caching: false
+      mm_processor_cache_gb: 0
+    is_comprehension: true
+    final_output: true
+    final_output_type: text
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 2048
+      seed: 42
+      detokenize: True
+      repetition_penalty: 1.1
+    output_connectors:
+      to_stage_1: mori_connector
+
+  - stage_id: 1
+    stage_type: llm
+    runtime:
+      process: true
+      devices: "1"
+      max_batch_size: 1
+    engine_args:
+      model_stage: talker
+      model_arch: Qwen2_5OmniForConditionalGeneration
+      worker_type: ar
+      scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
+      gpu_memory_utilization: 0.8
+      enforce_eager: true
+      trust_remote_code: true
+      enable_prefix_caching: false
+      engine_output_type: latent
+    engine_input_source: [0]
+    custom_process_input_func: vllm_omni.model_executor.stage_input_processors.qwen2_5_omni.thinker2talker
+    default_sampling_params:
+      temperature: 0.9
+      top_p: 0.8
+      top_k: 40
+      max_tokens: 2048
+      seed: 42
+      detokenize: True
+      repetition_penalty: 1.05
+      stop_token_ids: [8294]
+    input_connectors:
+      from_stage_0: mori_connector
+    output_connectors:
+      to_stage_2: mori_connector
+
+  - stage_id: 2
+    stage_type: llm
+    runtime:
+      process: true
+      devices: "2"
+      max_batch_size: 1
+    engine_args:
+      model_stage: code2wav
+      model_arch: Qwen2_5OmniForConditionalGeneration
+      worker_type: generation
+      scheduler_cls: vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler
+      gpu_memory_utilization: 0.3
+      enforce_eager: true
+      trust_remote_code: true
+      enable_prefix_caching: false
+      max_num_batched_tokens: 32768
+      engine_output_type: audio
+    engine_input_source: [1]
+    final_output: true
+    final_output_type: audio
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 2048
+      seed: 42
+      detokenize: True
+      repetition_penalty: 1.1
+    input_connectors:
+      from_stage_1: mori_connector
+
+runtime:
+  enabled: true
+  defaults:
+    window_size: -1
+    max_inflight: 1
+
+  connectors:
+    mori_connector:
+      name: MoriTransferEngineConnector
+      extra:
+        host: "auto"                  # Auto-detect local RDMA IP
+        zmq_port: 50051               # ZMQ control-plane port
+        device_name: ""               # RDMA device (empty = auto, e.g. "mlx5_0")
+        memory_pool_size: 536870912   # 512 MB
+        memory_pool_device: "cpu"     # "cpu" (pinned) or "cuda" (GPUDirect)
+        qp_per_transfer: 1            # RDMA QPs per transfer
+        num_worker_threads: 1         # RDMA worker threads
+        post_batch_size: -1           # -1 = auto
+
+  edges:
+    - from: 0
+      to: 1
+      window_size: -1
+    - from: 1
+      to: 2
+      window_size: -1
