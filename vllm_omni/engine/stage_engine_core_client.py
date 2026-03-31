@@ -32,6 +32,12 @@ class StageEngineCoreClient(AsyncMPClient):
     - All utility methods (shutdown, get_output_async, abort_requests_async, etc.)
 
     This is the async version of StageMPClient, designed for use with AsyncOmniEngine.
+
+    connector_transfers attribute:
+        Orchestrator writes ``pending_gets[req_id] = (receiver, metadata,
+        from_stage, to_stage)`` before calling add_request_async so that the
+        large additional_information tensors can be fetched from the mori
+        connector rather than deserialized from ZMQ.
     """
 
     def __init__(
@@ -69,6 +75,13 @@ class StageEngineCoreClient(AsyncMPClient):
             self.model_stage = metadata.model_stage
 
         self.engine_outputs: Any = None
+
+        # Connector-based transfer support (populated by AsyncOmniEngine after init)
+        # receiver_connectors: {(from_stage, to_stage): OmniConnectorBase}
+        self.receiver_connectors: dict[tuple[str, str], Any] = {}
+        # pending_gets: written by Orchestrator before add_request_async is called;
+        # each entry is (receiver_connector, put_metadata, from_stage, to_stage)
+        self.pending_gets: dict[str, tuple[Any, dict, str, str]] = {}
 
         logger.info(
             "[StageEngineCoreClient] Stage-%s initializing EngineCore",
@@ -109,7 +122,49 @@ class StageEngineCoreClient(AsyncMPClient):
     # ==================== Overrides ====================
 
     async def add_request_async(self, request: EngineCoreRequest) -> None:
-        """Add request to the stage engine core."""
+        """Add request to the stage engine core.
+
+        If the Orchestrator registered a connector GET for this request
+        (via pending_gets), attempt to retrieve additional_information via
+        RDMA and override the ZMQ-serialised payload already in the request.
+        If RDMA GET fails or returns nothing, the ZMQ-serialised version
+        (already in request.additional_information) is used as fallback.
+        """
+        pending = self.pending_gets.pop(request.request_id, None)
+        if pending is not None:
+            receiver, metadata, from_stage, to_stage = pending
+            try:
+                payload = receiver.get(from_stage, to_stage, request.request_id, metadata=metadata)
+                if payload is not None:
+                    payload_data = payload[0] if isinstance(payload, tuple) else payload
+                    engine_inputs = payload_data.get("engine_inputs") if isinstance(payload_data, dict) else None
+                    raw_info = (
+                        engine_inputs.get("additional_information")
+                        if isinstance(engine_inputs, dict)
+                        else None
+                    )
+                    if raw_info is not None:
+                        from vllm_omni.engine.serialization import serialize_additional_information
+
+                        request.additional_information = serialize_additional_information(
+                            raw_info,
+                            log_prefix=f"connector GET req={request.request_id}",
+                        )
+                        logger.info(
+                            "[StageEngineCoreClient] Stage-%s: connector GET %s->%s req=%s",
+                            self.stage_id,
+                            from_stage,
+                            to_stage,
+                            request.request_id,
+                        )
+            except Exception:
+                logger.warning(
+                    "[StageEngineCoreClient] Stage-%s: connector GET failed for req=%s; "
+                    "falling back to ZMQ-serialised additional_information",
+                    self.stage_id,
+                    request.request_id,
+                )
+
         logger.info(f"[StageEngineCoreClient] Stage-{self.stage_id} adding request: {request.request_id}")
         await super().add_request_async(request)
 
