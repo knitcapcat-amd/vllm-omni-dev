@@ -624,8 +624,7 @@ class Orchestrator:
                                 )
                     except Exception:
                         logger.warning(
-                            "[Orchestrator] req=%s: connector PUT %s->%s failed; "
-                            "falling back to ZMQ serialisation",
+                            "[Orchestrator] req=%s: connector PUT %s->%s failed; falling back to ZMQ serialisation",
                             req_id,
                             stage_id,
                             next_stage_id,

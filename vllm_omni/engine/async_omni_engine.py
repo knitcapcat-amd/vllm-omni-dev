@@ -627,8 +627,7 @@ class AsyncOmniEngine:
                     self.stage_receiver_connectors.append(_receivers or {})
             except Exception:
                 logger.exception(
-                    "[AsyncOmniEngine] Connector initialization failed; "
-                    "falling back to ZMQ-only inter-stage transfer"
+                    "[AsyncOmniEngine] Connector initialization failed; falling back to ZMQ-only inter-stage transfer"
                 )
                 self.omni_connectors = {}
                 self.stage_receiver_connectors = [{} for _ in range(num_stages)]

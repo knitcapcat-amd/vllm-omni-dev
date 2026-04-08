@@ -150,11 +150,7 @@ class StageEngineCoreClient(AsyncMPClient):
                 if payload is not None:
                     payload_data = payload[0] if isinstance(payload, tuple) else payload
                     engine_inputs = payload_data.get("engine_inputs") if isinstance(payload_data, dict) else None
-                    raw_info = (
-                        engine_inputs.get("additional_information")
-                        if isinstance(engine_inputs, dict)
-                        else None
-                    )
+                    raw_info = engine_inputs.get("additional_information") if isinstance(engine_inputs, dict) else None
                     if raw_info is not None:
                         from vllm_omni.engine.serialization import serialize_additional_information
 
