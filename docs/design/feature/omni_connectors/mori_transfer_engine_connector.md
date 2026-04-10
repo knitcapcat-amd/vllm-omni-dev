@@ -4,7 +4,8 @@
 
 Currently supports intra-node deployment with Mori.
 
-Inter-node support will come in a future refactor.
+As noted in #1742, inter-node support will be added back in a future
+refactor.
 
 ## Mechanism
 
