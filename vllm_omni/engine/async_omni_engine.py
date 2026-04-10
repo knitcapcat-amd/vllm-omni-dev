@@ -921,10 +921,10 @@ class AsyncOmniEngine:
 
             self._initialize_stages(stage_init_timeout)
 
-            # Attach receiver connectors to each StageEngineCoreClient so that
+            # Attach receiver connectors to each stage engine client so that
             # add_request_async can perform the mori GET before ZMQ dispatch.
             for _sid, _sc in enumerate(self.stage_clients):
-                if isinstance(_sc, StageEngineCoreClient):
+                if isinstance(_sc, StageEngineCoreClientBase):
                     _sc.receiver_connectors = self.stage_receiver_connectors[_sid]
 
             orchestrator = Orchestrator(
