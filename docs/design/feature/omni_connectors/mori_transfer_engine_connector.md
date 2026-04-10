@@ -2,7 +2,9 @@
 
 ## When to Use
 
-Best for high-performance multi-node data transfer using Mori RDMA transfer engine.
+Currently supports intra-node deployment with Mori.
+
+Inter-node support will come in a future refactor.
 
 ## Mechanism
 
