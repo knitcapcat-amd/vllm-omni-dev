@@ -53,9 +53,16 @@ try:
         MemoryDesc,
         PollCqMode,
         RdmaBackendConfig,
+        XgmiBackendConfig,
     )
 except ImportError:
     IOEngine = None
+
+# Supported backend types for Mori. Kept as string constants so configuration
+# (YAML / CLI / dict) stays transport-agnostic. ``rdma`` uses NIC-based RDMA
+# (RoCE / IB, GDR-capable); ``xgmi`` uses AMD Infinity Fabric GPU-to-GPU
+# direct links and therefore requires a CUDA pool.
+_SUPPORTED_BACKENDS = ("rdma", "xgmi")
 
 _BUFFER_TTL_SECONDS = 300
 
@@ -261,17 +268,38 @@ class MoriTransferEngineConnector(OmniConnectorBase):
             self.host = host_cfg
         self.zmq_port = config.get("zmq_port", 50051)
 
-        # ---- RDMA device ----
-        self.device_name = config.get("device_name", "")
-        if not self.device_name:
-            env_dev = os.environ.get("MORI_RDMA_DEVICES", "")
-            if env_dev:
-                self.device_name = env_dev
-                logger.info(f"Using MORI_RDMA_DEVICES from env: {self.device_name}")
+        # ---- Backend selection ----
+        # Defaults to "rdma" so existing deployments (pre-XGMI support) keep
+        # working unchanged. ``xgmi`` selects AMD Infinity Fabric GPU-to-GPU
+        # direct links; see ``mori.io.XgmiBackendConfig``.
+        backend_type_cfg = str(config.get("backend_type", "rdma")).lower()
+        if backend_type_cfg not in _SUPPORTED_BACKENDS:
+            raise ValueError(f"Invalid backend_type={backend_type_cfg!r}. Supported: {list(_SUPPORTED_BACKENDS)}.")
+        self.backend_type = backend_type_cfg
+
+        # ---- RDMA device (RDMA backend only) ----
+        self.device_name = ""
+        if self.backend_type == "rdma":
+            self.device_name = config.get("device_name", "")
+            if not self.device_name:
+                env_dev = os.environ.get("MORI_RDMA_DEVICES", "")
+                if env_dev:
+                    self.device_name = env_dev
+                    logger.info(f"Using MORI_RDMA_DEVICES from env: {self.device_name}")
+        elif config.get("device_name"):
+            logger.warning(
+                "device_name=%r is ignored for backend_type='xgmi' (XGMI does not use an RDMA NIC).",
+                config.get("device_name"),
+            )
 
         # ---- Pool config ----
         self.pool_size = config.get("memory_pool_size", 1024**3)
         self.pool_device = config.get("memory_pool_device", "cpu")
+        if self.backend_type == "xgmi" and self.pool_device == "cpu":
+            raise ValueError(
+                "backend_type='xgmi' requires memory_pool_device='cuda': "
+                "XGMI is a GPU-to-GPU fabric and cannot address CPU memory."
+            )
 
         # ---- Sender info (receiver uses this when metadata=None) ----
         self.sender_host = config.get("sender_host", None)
@@ -291,25 +319,40 @@ class MoriTransferEngineConnector(OmniConnectorBase):
         self.engine_key = f"omni-{role}-{uuid.uuid4().hex[:8]}-pid{os.getpid()}-{self.host}"
         self.engine = IOEngine(self.engine_key, engine_config)
 
-        qp_per_transfer = config.get("qp_per_transfer", 1)
-        post_batch_size = config.get("post_batch_size", -1)
-        num_workers = config.get("num_worker_threads", 1)
-
-        rdma_cfg = RdmaBackendConfig(
-            qp_per_transfer,
-            post_batch_size,
-            num_workers,
-            PollCqMode.POLLING,
-            False,
-        )
-        self.engine.create_backend(BackendType.RDMA, rdma_cfg)
+        # ---- Backend creation (per backend_type) ----
+        # ``IOEngine.batch_write`` is backend-agnostic, so only construction
+        # differs; the data-plane / ZMQ handshake paths below are identical.
+        if self.backend_type == "xgmi":
+            xgmi_cfg = XgmiBackendConfig()
+            xgmi_cfg.num_streams = config.get("xgmi_num_streams", 64)
+            xgmi_cfg.num_events = config.get("xgmi_num_events", 64)
+            self.engine.create_backend(BackendType.XGMI, xgmi_cfg)
+            logger.info(f"Mori backend: XGMI (num_streams={xgmi_cfg.num_streams}, num_events={xgmi_cfg.num_events})")
+        else:  # rdma
+            qp_per_transfer = config.get("qp_per_transfer", 1)
+            post_batch_size = config.get("post_batch_size", -1)
+            num_workers = config.get("num_worker_threads", 1)
+            rdma_cfg = RdmaBackendConfig(
+                qp_per_transfer,
+                post_batch_size,
+                num_workers,
+                PollCqMode.POLLING,
+                False,
+            )
+            self.engine.create_backend(BackendType.RDMA, rdma_cfg)
+            logger.info(
+                f"Mori backend: RDMA (qp_per_transfer={qp_per_transfer}, "
+                f"num_workers={num_workers}, device={self.device_name or 'auto'})"
+            )
 
         self.engine_desc: EngineDesc = self.engine.get_engine_desc()
         self.engine_desc_packed: bytes = self.engine_desc.pack()
         logger.info(f"Mori IOEngine ready: key={self.engine_key} at {self.engine_desc.host}:{self.engine_desc.port}")
 
         # ---- Pool allocation & Mori memory registration ----
-        logger.info(f"Allocating RDMA pool: {self.pool_size / 1024**2:.2f} MB on {self.pool_device}")
+        logger.info(
+            f"Allocating {self.backend_type.upper()} pool: {self.pool_size / 1024**2:.2f} MB on {self.pool_device}"
+        )
         try:
             if self.pool_device == "cpu":
                 self.pool = torch.empty(self.pool_size, dtype=torch.uint8).pin_memory()
