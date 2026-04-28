@@ -20,25 +20,23 @@ See the [Mori repository](https://github.com/ROCm/mori) for installation instruc
 
 ## Configuration
 
-Define the connector in runtime:
+Mori is configured through the new deploy-config schema (see
+[`docs/configuration/stage_configs.md`](../../../configuration/stage_configs.md)).
+Define the connector at the top level of the deploy YAML and reference it
+by name from each stage's `input_connectors` / `output_connectors`:
 
 ```yaml
-runtime:
-  connectors:
-    mori_connector:
-      name: MoriTransferEngineConnector
-      extra:
-        host: "auto"
-        zmq_port: 50051
-        device_name: ""
-        memory_pool_size: 536870912
-        memory_pool_device: "cpu"
-```
+connectors:
+  mori_connector:
+    name: MoriTransferEngineConnector
+    extra:
+      host: "auto"
+      zmq_port: 50051
+      device_name: ""
+      memory_pool_size: 536870912
+      memory_pool_device: "cuda"
 
-Wire stages to the connector:
-
-```yaml
-stage_args:
+stages:
   - stage_id: 0
     output_connectors:
       to_stage_1: mori_connector
@@ -48,13 +46,22 @@ stage_args:
       from_stage_0: mori_connector
 ```
 
+A ready-to-run intra-node example for Qwen2.5-Omni on AMD MI300X lives at
+[`vllm_omni/deploy/qwen2_5_omni_mori_intranode.yaml`](../../../../vllm_omni/deploy/qwen2_5_omni_mori_intranode.yaml)
+and can be loaded with:
+
+```bash
+vllm serve Qwen/Qwen2.5-Omni-7B --omni --log-stats \
+    --deploy-config vllm_omni/deploy/qwen2_5_omni_mori_intranode.yaml
+```
+
 Parameters:
 
 - host: local RDMA IP (`"auto"` for auto-detect).
 - zmq_port: ZMQ base port for control-plane communication.
 - device_name: RDMA device (e.g., `"mlx5_0"`), empty for auto-detect.
 - memory_pool_size: RDMA memory pool size in bytes.
-- memory_pool_device: `"cpu"` (pinned) or `"cuda"` (GPUDirect RDMA).
+- memory_pool_device: `"cpu"` (pinned) or `"cuda"` (GPUDirect / XGMI RDMA).
 
 For more details, refer to the
 [Mori repository](https://github.com/ROCm/mori).
