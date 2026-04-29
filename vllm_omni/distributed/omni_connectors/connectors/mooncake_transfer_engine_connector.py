@@ -281,6 +281,15 @@ class MooncakeTransferEngineConnector(OmniConnectorBase):
         }
 
         self.config = config
+
+        # Stage id is read by OmniChunkTransferAdapter.process_pending_chunks
+        # (and the AR / generation schedulers) to decide whether this
+        # connector sits at stage 0 of the pipeline.  Kept parallel to
+        # SharedMemoryConnector and MoriTransferEngineConnector.  Populated
+        # by OmniEngineArgs.create_model_config via the ``stage_id`` key
+        # that get_connectors_config_for_stage injects into extra.
+        self.stage_id = config.get("stage_id", -1)
+
         host_config = config.get("host")
         host_value = "auto" if host_config is None else str(host_config)
         # Default sender/receiver bootstrap to a routable local IP so the
