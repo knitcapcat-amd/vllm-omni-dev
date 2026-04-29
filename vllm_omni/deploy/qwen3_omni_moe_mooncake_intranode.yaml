@@ -6,18 +6,35 @@
 # Mori yaml; only the connector definition and its backend-specific
 # knobs differ.
 #
-# Transport note:
+# Transport note (default: ``rdma`` via Mellanox + GPUDirect RDMA):
 #   ``MooncakeTransferEngineConnector`` forwards ``protocol`` to
-#   ``mooncake.engine.TransferEngine.initialize`` and defaults to
-#   ``"rdma"``.  ``"xgmi"`` is accepted by Mooncake's C++ layer but as
-#   of mooncake shipped with the current container image the RDMA
-#   transport is still the only one that actually installs
-#   (``transfer_engine_impl.cpp:283 installTransport type=rdma`` in the
-#   boot log), so intranode MI300X transfers go over Mellanox RoCE/IB
-#   with ``memory_pool_device: cuda`` + GPUDirect RDMA rather than
-#   XGMI Infinity Fabric.  When Mooncake lands a true XGMI transport
-#   this yaml just has to flip ``protocol`` to ``"xgmi"``; the shape
-#   of the yaml itself stays the same.
+#   ``mooncake.engine.TransferEngine.initialize``.  The default here
+#   (``"rdma"``) drives Mooncake's RoCE/IB transport; on MI300X with
+#   ``memory_pool_device: "cuda"`` this ships tensors GPU-to-GPU via
+#   GPUDirect RDMA through the Mellanox HCAs.  This is the path
+#   end-to-end validated on this branch (three consecutive chat
+#   completions finish in 18.7 / 16.8 / 16.4 s with 93 per-chunk
+#   ``[RDMA GET]`` transfers at median ~0.7 ms on edge 0 -> 1).
+#
+# Switching to true XGMI:
+#   Mooncake PRs #1742 and #1550 add a first-class HIP transport that
+#   rides AMD Infinity Fabric XGMI directly, and expose it at the
+#   Python binding level via a ``xgmi -> hip`` normalization helper
+#   (so setting ``protocol: "xgmi"`` below asks for HIP).  Doing so
+#   requires:
+#     (a) a mooncake wheel built with ``-DUSE_HIP=ON`` and reinstalled
+#         into the container's Python env,
+#     (b) ``memory_pool_device: "cuda"`` (required for the HIP memory
+#         allocator), and
+#     (c) setting ``MC_FORCE_MNNVL=1`` in the vllm-omni launch env so
+#         ``TransferEngineImpl::init()`` installs the HIP transport
+#         instead of falling back to RDMA on boxes that also have
+#         HCAs discovered by the auto-topology scan.
+#   When all three are in place, Mooncake prints ``Selected HIP
+#   memory allocator`` at boot and subsequent transfers go over XGMI
+#   Infinity Fabric directly.  The RDMA default above is intentional
+#   until that full toolchain is validated end-to-end on this
+#   hardware.  Cross-node deployments must keep ``protocol: "rdma"``.
 #
 # Pipeline wiring (stage_id, execution_type, model_stage, input_sources,
 # custom processors, async-chunk builders) lives in
@@ -39,10 +56,10 @@ connectors:
     extra:
       host: "auto"
       zmq_port: 50051
-      protocol: "rdma"                # see transport note above
+      protocol: "rdma"                # see transport note above; set "xgmi" to opt into HIP
       device_name: ""                 # leave empty to honour $RDMA_DEVICE_NAME
       memory_pool_size: 536870912     # 512 MB, matches Mori yaml
-      memory_pool_device: "cuda"      # GPUDirect RDMA for zero-copy GPU-to-GPU
+      memory_pool_device: "cuda"      # required for HIP / XGMI memory allocator
       # Chunk-transfer knobs consumed by talker2code2wav_async_chunk:
       # 25 decoded codec frames per connector.put (~40 ms at 625 Hz
       # codec rate) with a 25-frame left context to satisfy the
