@@ -259,6 +259,14 @@ class MoriTransferEngineConnector(OmniConnectorBase):
 
         self.config = config
 
+        # Stage id is read by OmniChunkTransferAdapter (process_pending_chunks /
+        # _send_single_request / _poll_single_request / ...) to decide whether
+        # this connector sits at the sender or receiver end of a stage pair.
+        # Kept parallel to ``SharedMemoryConnector`` and other OmniConnector
+        # implementations. Populated by ``build_stage_connectors`` via the
+        # ``stage_id`` key that ``get_connectors_config_for_stage`` injects.
+        self.stage_id = config.get("stage_id", -1)
+
         # ---- Host / ZMQ ----
         host_cfg = config.get("host", "127.0.0.1")
         if host_cfg.lower() == "auto":
